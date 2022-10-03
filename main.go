@@ -345,7 +345,7 @@ func main() {
 				fmt.Println("Error parsing the balance", m.Balance.Amount, ok)
 				return
 			}
-			if newBalance.Cmp(old) != -1 {
+			if newBalance.Cmp(old) == -1 {
 				_, err = stmt.Exec(address, balance, "0")
 				if err != nil {
 					fmt.Println("Error adding 2:", m)
