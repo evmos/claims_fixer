@@ -3,3 +3,4 @@ claims-fixer
 claims.db
 errors.db
 claims.db.onlyaddresses
+fixed.db
