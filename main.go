@@ -289,7 +289,7 @@ func main() {
 		fmt.Println("Processing addresses:")
 		POST_HEIGHT := "5074187"
 
-		endpoint := "https://rest.bd.evmos.org:1317/"
+		endpoint := "http://localhost:1317/"
 		balance_start := "cosmos/bank/v1beta1/balances/"
 		balance_end := "/by_denom?denom=aevmos"
 
