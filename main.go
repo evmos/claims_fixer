@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/big"
 	"net/http"
 	"os"
 	"regexp"
@@ -226,6 +227,132 @@ func main() {
 					}
 				}
 
+			}
+		}
+
+		// Commit
+		err = tx.Commit()
+		if err != nil {
+			fmt.Printf("Error commiting transaction: %q", err)
+			return
+		}
+	} else if os.Args[1] == "fixresults" {
+		// Make sure that the balances went down after the clawback block
+		// We need to remove the accounts that were on the genesis block but had no claims records
+
+		// Init new database
+		dbToRead, err := sql.Open("sqlite3", "./data_generated.db")
+		if err != nil {
+			fmt.Printf("Error creating/opening database: %q", err)
+			return
+		}
+		defer dbToRead.Close()
+
+		// Init new database
+		db, err := sql.Open("sqlite3", "./fixed.db")
+		if err != nil {
+			fmt.Printf("Error creating/opening database: %q", err)
+			return
+		}
+		defer db.Close()
+
+		sqlStmt := `
+       create table if not exists claims (
+        id integer not null primary key,
+        address text,
+        balance text,
+        sequence text
+    );
+       `
+		_, err = db.Exec(sqlStmt)
+		if err != nil {
+			fmt.Printf("Error executing the table creation: %q", err)
+			return
+		}
+		fmt.Println("Database initialized")
+
+		tx, err := db.Begin()
+		if err != nil {
+			fmt.Printf("Error creating transaction: %q", err)
+			return
+		}
+
+		stmt, err := tx.Prepare("insert into claims(address, balance, sequence) values(?,?,?)")
+		if err != nil {
+			fmt.Printf("Error preparing transaction: %q", err)
+			return
+		}
+		defer stmt.Close()
+
+		// HttpRequests
+		client := &http.Client{}
+		fmt.Println("Processing addresses:")
+		POST_HEIGHT := "5074187"
+
+		endpoint := "https://rest.bd.evmos.org:1317/"
+		balance_start := "cosmos/bank/v1beta1/balances/"
+		balance_end := "/by_denom?denom=aevmos"
+
+		rows, err := dbToRead.Query("select id, address, balance from claims order by id")
+		if err != nil {
+			fmt.Println("Error reading addresses", err)
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id int
+			var address string
+			var balance string
+			err := rows.Scan(&id, &address, &balance)
+			if err != nil {
+				fmt.Println("Error getting row!", err)
+				return
+			}
+			old := new(big.Int)
+			old, ok := old.SetString(balance, 10)
+			if !ok {
+				fmt.Println("Error parsing the balance", balance, ok)
+				return
+			}
+
+			fmt.Println("Processing address:", address, id)
+			req, _ := http.NewRequest("GET", endpoint+balance_start+address+balance_end, nil)
+			req.Header.Set("x-cosmos-block-height", POST_HEIGHT)
+			res, err := client.Do(req)
+			if err != nil {
+				fmt.Println("Error getting the balance", address, err)
+				return
+			}
+			defer res.Body.Close()
+			body, err := ioutil.ReadAll(res.Body)
+
+			m := &BalanceResponse{}
+			err = json.Unmarshal(body, &m)
+			if err != nil {
+				fmt.Println("Error parsing the balance response", address, m)
+				_, err = stmt.Exec(address, "-1", "-1")
+				if err != nil {
+					fmt.Println("Error adding 1:", m)
+					return
+				}
+				continue
+			}
+
+			newBalance := new(big.Int)
+			newBalance, ok = newBalance.SetString(m.Balance.Amount, 10)
+			if !ok {
+				fmt.Println("Error parsing the balance", m.Balance.Amount, ok)
+				return
+			}
+			if newBalance.Cmp(old) != -1 {
+				_, err = stmt.Exec(address, balance, "0")
+				if err != nil {
+					fmt.Println("Error adding 2:", m)
+					return
+				}
+			} else {
+				fmt.Println("Address not in claims...", address)
 			}
 		}
 
