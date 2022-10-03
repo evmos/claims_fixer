@@ -147,11 +147,11 @@ func main() {
 		PRE_HEIGHT := "5074186"
 		//POST_HEIGHT := 5074187
 
-		endpoint := "https://rest.bd.evmos.org:1317/"
+		endpoint := "http://localhost:1317/"
 		balance_start := "cosmos/bank/v1beta1/balances/"
 		balance_end := "/by_denom?denom=aevmos"
 
-		rows, err := dbToRead.Query("select address from claims")
+		rows, err := dbToRead.Query("select id, address from claims order by id")
 		if err != nil {
 			fmt.Println("Error reading addresses", err)
 			return
@@ -159,14 +159,15 @@ func main() {
 		defer rows.Close()
 
 		for rows.Next() {
+			var id int
 			var address string
-			err := rows.Scan(&address)
+			err := rows.Scan(&id, &address)
 			if err != nil {
 				fmt.Println("Error getting row!", err)
 				return
 			}
 
-			fmt.Println("Processing address:", address)
+			fmt.Println("Processing address:", address, id)
 			req, _ := http.NewRequest("GET", endpoint+balance_start+address+balance_end, nil)
 			req.Header.Set("x-cosmos-block-height", PRE_HEIGHT)
 			res, err := client.Do(req)
@@ -181,7 +182,13 @@ func main() {
 			err = json.Unmarshal(body, &m)
 			if err != nil {
 				fmt.Println("Error parsing the balance response", address, m)
-				return
+				fmt.Println("Account with problems:", address, m.Balance.Amount)
+				_, err = stmt.Exec(address, "-1", "-1")
+				if err != nil {
+					fmt.Println("Error adding:", m)
+					return
+				}
+				continue
 			}
 
 			// Balance 1000000000000000 == dust to claim
