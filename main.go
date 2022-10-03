@@ -50,7 +50,7 @@ func main() {
 		sqlStmt := `
        create table if not exists claims (
         id integer not null primary key,
-        address text,
+        address text unique,
         balance text,
         sequence text
     );
@@ -84,8 +84,8 @@ func main() {
 		for _, m := range matches {
 			fmt.Println("Adding:", m)
 			_, err = stmt.Exec(strings.ReplaceAll(m, "\"", ""))
-			if err != nil {
-				fmt.Println("Error adding:", m)
+			if err != nil && err.Error() != "UNIQUE constraint failed: claims.address" {
+				fmt.Println("Error adding:", m, err)
 				return
 			}
 		}
