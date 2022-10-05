@@ -5,3 +5,6 @@ errors.db
 claims.db.onlyaddresses
 fixed.db
 ibcerrors.db
+accounts_with_claims.db
+results.db
+results.db-journal
