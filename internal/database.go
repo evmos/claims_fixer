@@ -56,19 +56,13 @@ func CreateDatabase(path string) *sql.DB {
 	return db
 }
 
-func CreateInsertBalanceQuery(db *sql.DB) (*sql.Tx, *sql.Stmt) {
-	tx, err := db.Begin()
-	if err != nil {
-		fmt.Printf("Error creating transaction: %q", err)
-		panic("Stop proceesing")
-	}
-
-	insertBalances, err := tx.Prepare("insert into balances(address, denom, preamount, postamount values(?,?,?,?)")
+func CreateInsertBalanceQuery(db *sql.DB, tx *sql.Tx)  *sql.Stmt {
+	insertBalances, err := tx.Prepare("insert into balances(address, denom, preamount, postamount) values(?,?,?,?)")
 	if err != nil {
 		fmt.Printf("Error preparing transaction: %q", err)
 		panic("Stop proceesing")
 	}
-	return tx, insertBalances
+	return insertBalances
 }
 
 func CreateInsertClaimsQuery(db *sql.DB) (*sql.Tx, *sql.Stmt) {
