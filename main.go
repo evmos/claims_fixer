@@ -1,161 +1,36 @@
 package main
 
 import (
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math/big"
-	"net/http"
 	"os"
-	"regexp"
-	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/hanchon/claims-fixer/internal"
 )
 
-type Balance struct {
-	Amount string `json:"amount"`
-	Denom  string `json:"denom"`
-}
-type BalanceResponse struct {
-	Balance Balance `json:"balance"`
-}
-
-type BalancesResponse struct {
-	Balances []Balance `json:"balances"`
-}
-
-// Note only sequece is getting unmarshalled
-type BaseAccount struct {
-	Sequence string `json:"sequence"`
-}
-
-type Account struct {
-	BaseAccount BaseAccount `json:"base_account"`
-}
-
-type AccountResponse struct {
-	Account Account `json:"account"`
-}
+var dust = "1000000000000000"
 
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println("Use init or process")
 		return
 	}
-	if os.Args[1] == "init" {
-		db, err := sql.Open("sqlite3", "./claims.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer db.Close()
-
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text unique,
-        balance text,
-        sequence text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
-		fmt.Println("Database initialized")
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-		stmt, err := tx.Prepare("insert into claims(address) values(?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
-
-		// For all the evmos1 addresses
-		content, err := os.ReadFile("genesis.json")
-		if err != nil {
-			fmt.Printf("Error reading the genesis: %q", err)
-			return
-		}
-		r := regexp.MustCompile(`"evmos1[a-z0-9]*"`)
-		matches := r.FindAllString(string(content), -1)
-		for _, m := range matches {
-			fmt.Println("Adding:", m)
-			_, err = stmt.Exec(strings.ReplaceAll(m, "\"", ""))
-			if err != nil && err.Error() != "UNIQUE constraint failed: claims.address" {
-				fmt.Println("Error adding:", m, err)
-				return
-			}
-		}
-
-		// Commit
-		err = tx.Commit()
-		if err != nil {
-			fmt.Printf("Error commiting transaction: %q", err)
-			return
-		}
-		fmt.Println("All addresses added")
-
-	} else if os.Args[1] == "process" {
-		// Read accounts from this database
-		dbToRead, err := sql.Open("sqlite3", "./claims.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
+	if os.Args[1] == "process" {
+		dbToRead := internal.OpenDatabase("./accounts_with_claims.go")
 		defer dbToRead.Close()
+		fmt.Println("Database opened")
 
-		// Init new database
-		db, err := sql.Open("sqlite3", "./errors.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
+		db := internal.CreateDatabase("./results.go")
 		defer db.Close()
-
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text,
-        balance text,
-        sequence text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
 		fmt.Println("Database initialized")
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-		stmt, err := tx.Prepare("insert into claims(address, balance, sequence) values(?,?,?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
 
-		// HttpRequests
-		client := &http.Client{}
-		fmt.Println("Processing addresses:")
-		PRE_HEIGHT := "5074186"
-		//POST_HEIGHT := 5074187
+		txClaims, insertClaims := internal.CreateInsertClaimsQuery(db)
+		defer insertClaims.Close()
 
-		endpoint := "http://localhost:1317/"
-		balance_start := "cosmos/bank/v1beta1/balances/"
-		balance_end := "/by_denom?denom=aevmos"
+		txBalances, insertBalances := internal.CreateInsertBalanceQuery(db)
+		defer insertBalances.Close()
 
+		// For each account get its info
 		rows, err := dbToRead.Query("select id, address from claims order by id")
 		if err != nil {
 			fmt.Println("Error reading addresses", err)
@@ -172,316 +47,85 @@ func main() {
 				return
 			}
 
-			fmt.Println("Processing address:", address, id)
-			req, _ := http.NewRequest("GET", endpoint+balance_start+address+balance_end, nil)
-			req.Header.Set("x-cosmos-block-height", PRE_HEIGHT)
-			res, err := client.Do(req)
-			if err != nil {
-				fmt.Println("Error getting the balance", address, err)
-				return
-			}
-			defer res.Body.Close()
-			body, err := ioutil.ReadAll(res.Body)
+			// Get the sequence number, if it's 0 continue processing
+			accountPreRes := internal.GetAccount(address, internal.PreHeight)
+			if accountPreRes.Account.BaseAccount.Sequence == "0" {
+				balancePreRes := internal.GetBalances(address, internal.PreHeight)
+				balancePostRes := internal.GetBalances(address, internal.PostHeight)
+				// Make sure that the account still exists
+				accountPostRes := internal.GetAccount(address, internal.PostHeight)
 
-			m := &BalanceResponse{}
-			err = json.Unmarshal(body, &m)
-			if err != nil {
-				fmt.Println("Error parsing the balance response", address, m)
-				fmt.Println("Account with problems:", address, m.Balance.Amount)
-				_, err = stmt.Exec(address, "-1", "-1")
-				if err != nil {
-					fmt.Println("Error adding:", m)
-					return
+				// Data to store
+				ibcBalance := make(map[string][]string)
+				preBalance := "-1"
+				postBalance := "-1"
+				affected := false
+
+				for _, k := range balancePreRes.Balances {
+					if k.Denom == "aevmos" {
+						preBalance = k.Denom
+					} else {
+						ibcBalance[k.Denom] = []string{k.Amount, "0"}
+					}
 				}
-				continue
-			}
 
-			// Balance 1000000000000000 == dust to claim
-			if m.Balance.Amount != "1000000000000000" {
-				// Get the balance sequence
-
-				PRE_HEIGHT := "5074186"
-				//POST_HEIGHT := 5074187
-
-				account_start := "cosmos/auth/v1beta1/accounts/"
-
-				req, _ := http.NewRequest("GET", endpoint+account_start+address, nil)
-				req.Header.Set("x-cosmos-block-height", PRE_HEIGHT)
-				res, err := client.Do(req)
-				if err != nil {
-					fmt.Println("Error getting the balance", address, err)
-					return
+				for _, k := range balancePostRes.Balances {
+					if k.Denom == "aevmos" {
+						postBalance = k.Denom
+					} else {
+						ibcBalance[k.Denom][1] = k.Amount
+					}
 				}
-				defer res.Body.Close()
-				body, err := ioutil.ReadAll(res.Body)
 
-				a := &AccountResponse{}
-				err = json.Unmarshal(body, &a)
-				if err != nil {
-					fmt.Println("Error parsing the account response", address, a)
+				old := new(big.Int)
+				old, ok := old.SetString(preBalance, 10)
+				if !ok {
+					fmt.Println("Error parsing the balance", preBalance, ok)
 					return
 				}
 
-				if a.Account.BaseAccount.Sequence == "0" {
-					fmt.Println("Account with problems:", address, m.Balance.Amount)
-					_, err = stmt.Exec(address, m.Balance.Amount, a.Account.BaseAccount.Sequence)
+				newBalance := new(big.Int)
+				newBalance, ok = newBalance.SetString(postBalance, 10)
+				if !ok {
+					fmt.Println("Error parsing the balance", postBalance, ok)
+					return
+				}
+
+				if newBalance.Cmp(old) == -1 {
+					affected = true
+				}
+
+				// Store the data
+				_, err = insertClaims.Exec(address, preBalance, postBalance, accountPreRes.Account.BaseAccount.Sequence, accountPostRes.Account.BaseAccount.Sequence, affected)
+				if err != nil {
+					fmt.Println("Error adding:", err)
+					return
+				}
+
+				for k, v := range ibcBalance {
+					_, err = insertBalances.Exec(address, k, v[0], v[1])
 					if err != nil {
-						fmt.Println("Error adding:", m)
+						fmt.Println("Error adding ibc:", err)
 						return
 					}
 				}
 
 			}
-		}
-
-		// Commit
-		err = tx.Commit()
-		if err != nil {
-			fmt.Printf("Error commiting transaction: %q", err)
-			return
-		}
-	} else if os.Args[1] == "fixresults" {
-		// Make sure that the balances went down after the clawback block
-		// We need to remove the accounts that were on the genesis block but had no claims records
-
-		// Init new database
-		dbToRead, err := sql.Open("sqlite3", "./data_generated.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer dbToRead.Close()
-
-		// Init new database
-		db, err := sql.Open("sqlite3", "./fixed.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer db.Close()
-
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text,
-        balance text,
-        sequence text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
-		fmt.Println("Database initialized")
-
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-
-		stmt, err := tx.Prepare("insert into claims(address, balance, sequence) values(?,?,?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
-
-		// HttpRequests
-		client := &http.Client{}
-		fmt.Println("Processing addresses:")
-		POST_HEIGHT := "5074187"
-
-		endpoint := "http://localhost:1317/"
-		balance_start := "cosmos/bank/v1beta1/balances/"
-		balance_end := "/by_denom?denom=aevmos"
-
-		rows, err := dbToRead.Query("select id, address, balance from claims order by id")
-		if err != nil {
-			fmt.Println("Error reading addresses", err)
-			return
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var id int
-			var address string
-			var balance string
-			err := rows.Scan(&id, &address, &balance)
-			if err != nil {
-				fmt.Println("Error getting row!", err)
-				return
-			}
-			old := new(big.Int)
-			old, ok := old.SetString(balance, 10)
-			if !ok {
-				fmt.Println("Error parsing the balance", balance, ok)
-				return
-			}
-
-			fmt.Println("Processing address:", address, id)
-			req, _ := http.NewRequest("GET", endpoint+balance_start+address+balance_end, nil)
-			req.Header.Set("x-cosmos-block-height", POST_HEIGHT)
-			res, err := client.Do(req)
-			if err != nil {
-				fmt.Println("Error getting the balance", address, err)
-				return
-			}
-			defer res.Body.Close()
-			body, err := ioutil.ReadAll(res.Body)
-
-			m := &BalanceResponse{}
-			err = json.Unmarshal(body, &m)
-			if err != nil {
-				fmt.Println("Error parsing the balance response", address, m)
-				_, err = stmt.Exec(address, "-1", "-1")
-				if err != nil {
-					fmt.Println("Error adding 1:", m)
-					return
-				}
-				continue
-			}
-
-			newBalance := new(big.Int)
-			newBalance, ok = newBalance.SetString(m.Balance.Amount, 10)
-			if !ok {
-				fmt.Println("Error parsing the balance", m.Balance.Amount, ok)
-				return
-			}
-			if newBalance.Cmp(old) == -1 {
-				_, err = stmt.Exec(address, balance, "0")
-				if err != nil {
-					fmt.Println("Error adding 2:", m)
-					return
-				}
-			} else {
-				fmt.Println("Address not in claims...", address)
-			}
-		}
-
-		// Commit
-		err = tx.Commit()
-		if err != nil {
-			fmt.Printf("Error commiting transaction: %q", err)
-			return
-		}
-	} else if os.Args[1] == "checkforibcbalance" {
-		// Make sure that the balances went down after the clawback block
-		// We need to remove the accounts that were on the genesis block but had no claims records
-
-		// Init new database
-		dbToRead, err := sql.Open("sqlite3", "./data_generated.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer dbToRead.Close()
-
-		// Init new database
-		db, err := sql.Open("sqlite3", "./ibcerrors.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer db.Close()
-
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text,
-        balance text,
-        denom text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
-		fmt.Println("Database initialized")
-
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-
-		stmt, err := tx.Prepare("insert into claims(address, balance, denom) values(?,?,?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
-
-		// HttpRequests
-		client := &http.Client{}
-		fmt.Println("Processing addresses:")
-		PRE_HEIGHT := "5074186"
-
-		endpoint := "https://rest.bd.evmos.org:1317/"
-		balance_start := "cosmos/bank/v1beta1/balances/"
-
-		rows, err := dbToRead.Query("select id, address, balance from claims where balance=\"0\"")
-		if err != nil {
-			fmt.Println("Error reading addresses", err)
-			return
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var id int
-			var address string
-			var balance string
-			err := rows.Scan(&id, &address, &balance)
-			if err != nil {
-				fmt.Println("Error getting row!", err)
-				return
-			}
-
-			fmt.Println("Processing address:", address, id)
-			req, _ := http.NewRequest("GET", endpoint+balance_start+address, nil)
-			req.Header.Set("x-cosmos-block-height", PRE_HEIGHT)
-			res, err := client.Do(req)
-			if err != nil {
-				fmt.Println("Error getting the balance", address, err)
-				return
-			}
-			defer res.Body.Close()
-			body, err := ioutil.ReadAll(res.Body)
-			fmt.Println(string(body))
-
-			m := &BalancesResponse{}
-			err = json.Unmarshal(body, &m)
-			if err != nil {
-				fmt.Println("Error parsing the balance response", address, m)
-				_, err = stmt.Exec(address, "-1", "-1")
-				if err != nil {
-					fmt.Println("Error adding 1:", m)
-					return
-				}
-				continue
-			}
-
-			for _, balance := range m.Balances {
-				if balance.Amount != "0" {
-					fmt.Println(address, balance.Amount, balance.Denom)
-					_, err = stmt.Exec(address, balance.Amount, balance.Denom)
-					if err != nil {
-						fmt.Println("Error adding 2:", m)
-						return
-					}
-				}
-			}
 
 		}
 
 		// Commit
-		err = tx.Commit()
+		err = txClaims.Commit()
 		if err != nil {
 			fmt.Printf("Error commiting transaction: %q", err)
 			return
 		}
+		err = txBalances.Commit()
+		if err != nil {
+			fmt.Printf("Error commiting transaction: %q", err)
+			return
+		}
+		fmt.Println("All addresses added")
 
 	} else {
 		fmt.Println("Invalid option")
