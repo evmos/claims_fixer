@@ -4,7 +4,7 @@
 
 - go
 - mainnet genesis (`wget https://archive.evmos.org/mainnet/genesis.json`)
-- clawback block results (`wget wget https://github.com/v-homsi/clawback/raw/main/evmos_mainnet_5074187_block-results.json`)
+- clawback block results (`wget https://github.com/v-homsi/clawback/raw/main/evmos_mainnet_5074187_block-results.json`)
 - evmosd node archive
 
 ## Configuration
