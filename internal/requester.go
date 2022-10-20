@@ -8,7 +8,7 @@ import (
 )
 
 var client = &http.Client{}
-var clientUrl = "https://rest.bd.evmos.org:1317/"
+var clientUrl = "http://localhost:1317/"
 var PreHeight = "5074186"
 var PostHeight = "5074187"
 
