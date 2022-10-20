@@ -80,8 +80,6 @@ func main() {
 		rows.Close()
 		dbToRead.Close()
 
-		accountsToProcess = accountsToProcess[0:3000]
-
 		// Create the workers
 		process := internal.NewProcess()
 		var wg sync.WaitGroup
