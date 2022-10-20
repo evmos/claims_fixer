@@ -4,6 +4,7 @@
 
 - go
 - mainnet genesis (`wget https://archive.evmos.org/mainnet/genesis.json`)
+- clawback block results (`wget wget https://github.com/v-homsi/clawback/raw/main/evmos_mainnet_5074187_block-results.json`)
 - evmosd node archive
 
 ## Configuration
@@ -19,11 +20,14 @@ Note: if you want to run the process again, make sure to remove the `.db` file.
 git clone https://github.com/tharsis/claims_fixer -depth 1
 cd claims_fixer
 wget https://archive.evmos.org/mainnet/genesis.json
+wget https://github.com/v-homsi/clawback/raw/main/evmos_mainnet_5074187_block-results.json
 go build
 rm accounts_with_claims.db
 rm results.db
 ./claims_fixer init
 ./claims_fixer process
+./claims_fixer addAttestationRecords
+./claims_fixer processAttestationRecords
 ```
 
 ## Results

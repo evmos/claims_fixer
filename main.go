@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/hanchon/claims-fixer/internal"
@@ -19,6 +21,9 @@ func main() {
 	}
 
 	if os.Args[1] == "init" {
+		// Get genesis wallets
+		genesisWallets := make(map[string]bool)
+
 		fmt.Println("Creating accounts database...")
 		db := internal.OpenDatabase("./accounts_with_claims.db")
 		internal.CreateAccountDatabase(db)
@@ -38,12 +43,50 @@ func main() {
 			panic("Stop processing")
 		}
 
-		fmt.Println("Adding accounts to database...")
+		fmt.Println("Adding accounts to database from genesis...")
 		for _, v := range genesis.AppState.Claims.ClaimsRecords {
-			_, err := stmt.Exec(v.Address)
-			if err != nil {
-				fmt.Println("Error adding address:", err)
-				panic("Stop processing")
+			genesisWallets[v.Address] = true
+		}
+
+		fmt.Println("Adding accounts to database from the clawback block...")
+		// Get all the wallets in the block_result for the clawback block
+		content, err = os.ReadFile("evmos_mainnet_5074187_block-results.json")
+		if err != nil {
+			fmt.Printf("Error reading the genesis: %q", err)
+			return
+		}
+
+		var m internal.BlockResult
+		err = json.Unmarshal(content, &m)
+		if err != nil {
+			panic("fail unmarshal")
+		}
+
+		newWallets := make(map[string]bool)
+
+		for _, v := range m.Result.EndBlockEvents {
+			for _, wallet := range v.Attributes {
+				if rawDecodedText, err := base64.StdEncoding.DecodeString(wallet.Value); err == nil {
+					walletDecoded := string(rawDecodedText)
+					// Ignore community wallet because it's the destination
+					if walletDecoded == "evmos1jv65s3grqf6v6jl3dp4t6c9t9rk99cd8974jnh" {
+						continue
+					}
+					if strings.Contains(walletDecoded, "evmos1") {
+						if _, ok := newWallets[walletDecoded]; ok {
+							continue
+						}
+
+						if _, ok := genesisWallets[string(rawDecodedText)]; ok == false {
+							newWallets[walletDecoded] = true
+							_, err := stmt.Exec(walletDecoded)
+							if err != nil {
+								fmt.Println("Error adding address:", err)
+								panic("Stop processing")
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -108,6 +151,139 @@ func main() {
 		wg.Wait()
 		process.TxCommit()
 		fmt.Println("Everything finished correctly")
+
+	} else if os.Args[1] == "addAttestationRecords" {
+		// Get genesis wallets
+		genesisWallets := make(map[string]bool)
+
+		fmt.Println("Creating accounts database...")
+		db := internal.OpenDatabase("./attestation_accounts.db")
+		internal.CreateAccountDatabase(db)
+		tx, stmt := internal.CreateInsertAccountQuery(db)
+
+		fmt.Println("Parsing the genesis file...")
+		content, err := os.ReadFile("genesis.json")
+		if err != nil {
+			fmt.Printf("Error reading the genesis: %q", err)
+			return
+		}
+
+		var genesis internal.Genesis
+		err = json.Unmarshal(content, &genesis)
+		if err != nil {
+			fmt.Println("Error unmarshalling genesis:", err)
+			panic("Stop processing")
+		}
+
+		for _, v := range genesis.AppState.Claims.ClaimsRecords {
+			genesisWallets[v.Address] = true
+		}
+
+		fmt.Println("Adding accounts to database from the clawback block...")
+
+		// Get all the wallets in the block_result for the clawback block
+		content, err = os.ReadFile("evmos_mainnet_5074187_block-results.json")
+		if err != nil {
+			fmt.Printf("Error reading the genesis: %q", err)
+			return
+		}
+
+		var m internal.BlockResult
+		err = json.Unmarshal(content, &m)
+		if err != nil {
+			panic("fail unmarshal")
+		}
+
+		newWallets := make(map[string]bool)
+
+		for _, v := range m.Result.EndBlockEvents {
+			for _, wallet := range v.Attributes {
+				if rawDecodedText, err := base64.StdEncoding.DecodeString(wallet.Value); err == nil {
+					walletDecoded := string(rawDecodedText)
+					// Ignore community wallet because it's the destination
+					if walletDecoded == "evmos1jv65s3grqf6v6jl3dp4t6c9t9rk99cd8974jnh" {
+						continue
+					}
+					if strings.Contains(walletDecoded, "evmos1") {
+						if _, ok := newWallets[walletDecoded]; ok {
+							continue
+						}
+
+						if _, ok := genesisWallets[string(rawDecodedText)]; ok == false {
+							newWallets[walletDecoded] = true
+							_, err := stmt.Exec(walletDecoded)
+							if err != nil {
+								fmt.Println("Error adding address:", err)
+								panic("Stop processing")
+							}
+						}
+					}
+				}
+			}
+		}
+
+		fmt.Println("Commint changes to database...")
+		err = tx.Commit()
+		if err != nil {
+			fmt.Printf("Error commiting transaction: %q", err)
+			panic("Failed to commit tx")
+		}
+		fmt.Println("All addresses added")
+
+	} else if os.Args[1] == "processAttestationRecords" {
+		var accountsToProcess []string
+
+		dbToRead := internal.OpenDatabase("./attestation_accounts.db")
+		fmt.Println("Database opened")
+
+		// For each account get its info
+		rows, err := dbToRead.Query("select address from account order by id")
+		if err != nil {
+			fmt.Println("Error reading addresses", err)
+			return
+		}
+
+		for rows.Next() {
+			var address string
+			err := rows.Scan(&address)
+			if err != nil {
+				fmt.Println("Error getting row!", err)
+				return
+			}
+			accountsToProcess = append(accountsToProcess, address)
+		}
+		fmt.Println("Finished getting all the addresses")
+		rows.Close()
+		dbToRead.Close()
+
+		// Create the workers
+		process := internal.NewProcess()
+		var wg sync.WaitGroup
+		wg.Add(threads)
+
+		value := len(accountsToProcess) / threads
+		j := 0
+		offset := 0
+		for j < threads {
+			if j == threads-1 {
+				go func(offset int) {
+					process.DoWork(accountsToProcess[offset:])
+					wg.Done()
+				}(offset)
+			} else {
+				go func(offset int) {
+					process.DoWork(accountsToProcess[offset : offset+value])
+					wg.Done()
+				}(offset)
+			}
+			offset = offset + value
+			j = j + 1
+		}
+
+		wg.Wait()
+		process.TxCommit()
+		fmt.Println("Everything finished correctly")
+
 	} else if os.Args[1] == "create" {
 		fmt.Println("Creating go file for the upgrade...")
 
