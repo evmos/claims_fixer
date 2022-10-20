@@ -25,6 +25,20 @@ func GetBalances(address string, height string) BalancesResponse {
 	return *m
 }
 
+func GetEvmosBalance(address string, height string) BalancesResponse {
+	balance_start := "cosmos/bank/v1beta1/balances/"
+	balance_end := "/by_denom?denom=aevmos"
+	url := balance_start + address + balance_end
+	body := makeRequest(url, height)
+	m := &BalancesResponse{}
+	err := json.Unmarshal(body, &m)
+	if err != nil {
+		fmt.Println("Error parsing the body", body, err)
+		panic("Stop processing")
+	}
+	return *m
+}
+
 func GetAccount(address, height string) AccountResponse {
 	account_start := "cosmos/auth/v1beta1/accounts/"
 	url := account_start + address
