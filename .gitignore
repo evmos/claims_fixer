@@ -8,3 +8,5 @@ ibcerrors.db
 results.db-journal
 accounts_with_claims.db
 evmos_mainnet_5074187_block-results.json
+attestation_accounts.db
+
