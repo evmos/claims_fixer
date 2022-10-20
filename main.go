@@ -1,368 +1,77 @@
 package main
 
 import (
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"math/big"
-	"net/http"
 	"os"
-	"regexp"
-	"strings"
+	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/hanchon/claims-fixer/internal"
 )
 
-type Balance struct {
-	Amount string `json:"amount"`
-	Denom  string `json:"denom"`
-}
-type BalanceResponse struct {
-	Balance Balance `json:"balance"`
-}
-
-// Note only sequece is getting unmarshalled
-type BaseAccount struct {
-	Sequence string `json:"sequence"`
-}
-
-type Account struct {
-	BaseAccount BaseAccount `json:"base_account"`
-}
-
-type AccountResponse struct {
-	Account Account `json:"account"`
-}
+var dust = "1000000000000000"
+var threads = 16
 
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println("Use init or process")
 		return
 	}
-	if os.Args[1] == "init" {
-		db, err := sql.Open("sqlite3", "./claims.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer db.Close()
+	if os.Args[1] == "process" {
+		var accountsToProcess []string
 
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text unique,
-        balance text,
-        sequence text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
-		fmt.Println("Database initialized")
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-		stmt, err := tx.Prepare("insert into claims(address) values(?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
+		dbToRead := internal.OpenDatabase("./accounts_with_claims.db")
+		fmt.Println("Database opened")
 
-		// For all the evmos1 addresses
-		content, err := os.ReadFile("genesis.json")
-		if err != nil {
-			fmt.Printf("Error reading the genesis: %q", err)
-			return
-		}
-		r := regexp.MustCompile(`"evmos1[a-z0-9]*"`)
-		matches := r.FindAllString(string(content), -1)
-		for _, m := range matches {
-			fmt.Println("Adding:", m)
-			_, err = stmt.Exec(strings.ReplaceAll(m, "\"", ""))
-			if err != nil && err.Error() != "UNIQUE constraint failed: claims.address" {
-				fmt.Println("Error adding:", m, err)
-				return
-			}
-		}
-
-		// Commit
-		err = tx.Commit()
-		if err != nil {
-			fmt.Printf("Error commiting transaction: %q", err)
-			return
-		}
-		fmt.Println("All addresses added")
-
-	} else if os.Args[1] == "process" {
-		// Read accounts from this database
-		dbToRead, err := sql.Open("sqlite3", "./claims.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer dbToRead.Close()
-
-		// Init new database
-		db, err := sql.Open("sqlite3", "./errors.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer db.Close()
-
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text,
-        balance text,
-        sequence text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
-		fmt.Println("Database initialized")
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-		stmt, err := tx.Prepare("insert into claims(address, balance, sequence) values(?,?,?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
-
-		// HttpRequests
-		client := &http.Client{}
-		fmt.Println("Processing addresses:")
-		PRE_HEIGHT := "5074186"
-		//POST_HEIGHT := 5074187
-
-		endpoint := "http://localhost:1317/"
-		balance_start := "cosmos/bank/v1beta1/balances/"
-		balance_end := "/by_denom?denom=aevmos"
-
-		rows, err := dbToRead.Query("select id, address from claims order by id")
+		// For each account get its info
+		rows, err := dbToRead.Query("select address from claims order by id")
 		if err != nil {
 			fmt.Println("Error reading addresses", err)
 			return
 		}
-		defer rows.Close()
 
 		for rows.Next() {
-			var id int
 			var address string
-			err := rows.Scan(&id, &address)
+			err := rows.Scan(&address)
 			if err != nil {
 				fmt.Println("Error getting row!", err)
 				return
 			}
-
-			fmt.Println("Processing address:", address, id)
-			req, _ := http.NewRequest("GET", endpoint+balance_start+address+balance_end, nil)
-			req.Header.Set("x-cosmos-block-height", PRE_HEIGHT)
-			res, err := client.Do(req)
-			if err != nil {
-				fmt.Println("Error getting the balance", address, err)
-				return
-			}
-			defer res.Body.Close()
-			body, err := ioutil.ReadAll(res.Body)
-
-			m := &BalanceResponse{}
-			err = json.Unmarshal(body, &m)
-			if err != nil {
-				fmt.Println("Error parsing the balance response", address, m)
-				fmt.Println("Account with problems:", address, m.Balance.Amount)
-				_, err = stmt.Exec(address, "-1", "-1")
-				if err != nil {
-					fmt.Println("Error adding:", m)
-					return
-				}
-				continue
-			}
-
-			// Balance 1000000000000000 == dust to claim
-			if m.Balance.Amount != "1000000000000000" {
-				// Get the balance sequence
-
-				PRE_HEIGHT := "5074186"
-				//POST_HEIGHT := 5074187
-
-				account_start := "cosmos/auth/v1beta1/accounts/"
-
-				req, _ := http.NewRequest("GET", endpoint+account_start+address, nil)
-				req.Header.Set("x-cosmos-block-height", PRE_HEIGHT)
-				res, err := client.Do(req)
-				if err != nil {
-					fmt.Println("Error getting the balance", address, err)
-					return
-				}
-				defer res.Body.Close()
-				body, err := ioutil.ReadAll(res.Body)
-
-				a := &AccountResponse{}
-				err = json.Unmarshal(body, &a)
-				if err != nil {
-					fmt.Println("Error parsing the account response", address, a)
-					return
-				}
-
-				if a.Account.BaseAccount.Sequence == "0" {
-					fmt.Println("Account with problems:", address, m.Balance.Amount)
-					_, err = stmt.Exec(address, m.Balance.Amount, a.Account.BaseAccount.Sequence)
-					if err != nil {
-						fmt.Println("Error adding:", m)
-						return
-					}
-				}
-
-			}
+			accountsToProcess = append(accountsToProcess, address)
 		}
+		fmt.Println("Finished getting all the addresses")
+		rows.Close()
+		dbToRead.Close()
 
-		// Commit
-		err = tx.Commit()
-		if err != nil {
-			fmt.Printf("Error commiting transaction: %q", err)
-			return
-		}
-	} else if os.Args[1] == "fixresults" {
-		// Make sure that the balances went down after the clawback block
-		// We need to remove the accounts that were on the genesis block but had no claims records
+		// Create the workers
+		process := internal.NewProcess()
+		var wg sync.WaitGroup
+		wg.Add(threads)
 
-		// Init new database
-		dbToRead, err := sql.Open("sqlite3", "./data_generated.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer dbToRead.Close()
-
-		// Init new database
-		db, err := sql.Open("sqlite3", "./fixed.db")
-		if err != nil {
-			fmt.Printf("Error creating/opening database: %q", err)
-			return
-		}
-		defer db.Close()
-
-		sqlStmt := `
-       create table if not exists claims (
-        id integer not null primary key,
-        address text,
-        balance text,
-        sequence text
-    );
-       `
-		_, err = db.Exec(sqlStmt)
-		if err != nil {
-			fmt.Printf("Error executing the table creation: %q", err)
-			return
-		}
-		fmt.Println("Database initialized")
-
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Printf("Error creating transaction: %q", err)
-			return
-		}
-
-		stmt, err := tx.Prepare("insert into claims(address, balance, sequence) values(?,?,?)")
-		if err != nil {
-			fmt.Printf("Error preparing transaction: %q", err)
-			return
-		}
-		defer stmt.Close()
-
-		// HttpRequests
-		client := &http.Client{}
-		fmt.Println("Processing addresses:")
-		POST_HEIGHT := "5074187"
-
-		endpoint := "http://localhost:1317/"
-		balance_start := "cosmos/bank/v1beta1/balances/"
-		balance_end := "/by_denom?denom=aevmos"
-
-		rows, err := dbToRead.Query("select id, address, balance from claims order by id")
-		if err != nil {
-			fmt.Println("Error reading addresses", err)
-			return
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var id int
-			var address string
-			var balance string
-			err := rows.Scan(&id, &address, &balance)
-			if err != nil {
-				fmt.Println("Error getting row!", err)
-				return
-			}
-			old := new(big.Int)
-			old, ok := old.SetString(balance, 10)
-			if !ok {
-				fmt.Println("Error parsing the balance", balance, ok)
-				return
-			}
-
-			fmt.Println("Processing address:", address, id)
-			req, _ := http.NewRequest("GET", endpoint+balance_start+address+balance_end, nil)
-			req.Header.Set("x-cosmos-block-height", POST_HEIGHT)
-			res, err := client.Do(req)
-			if err != nil {
-				fmt.Println("Error getting the balance", address, err)
-				return
-			}
-			defer res.Body.Close()
-			body, err := ioutil.ReadAll(res.Body)
-
-			m := &BalanceResponse{}
-			err = json.Unmarshal(body, &m)
-			if err != nil {
-				fmt.Println("Error parsing the balance response", address, m)
-				_, err = stmt.Exec(address, "-1", "-1")
-				if err != nil {
-					fmt.Println("Error adding 1:", m)
-					return
-				}
-				continue
-			}
-
-			newBalance := new(big.Int)
-			newBalance, ok = newBalance.SetString(m.Balance.Amount, 10)
-			if !ok {
-				fmt.Println("Error parsing the balance", m.Balance.Amount, ok)
-				return
-			}
-			if newBalance.Cmp(old) == -1 {
-				_, err = stmt.Exec(address, balance, "0")
-				if err != nil {
-					fmt.Println("Error adding 2:", m)
-					return
-				}
+		value := len(accountsToProcess) / threads
+		fmt.Println(value)
+		j := 0
+		offset := 0
+		for j < threads {
+			if j == threads-1 {
+				go func(offset int) {
+					fmt.Println(offset)
+					process.DoWork(accountsToProcess[offset:])
+					wg.Done()
+				}(offset)
 			} else {
-				fmt.Println("Address not in claims...", address)
+				go func(offset int) {
+					fmt.Println(offset)
+					process.DoWork(accountsToProcess[offset : offset+value])
+					wg.Done()
+				}(offset)
 			}
+			offset = offset + value
+			j = j + 1
 		}
 
-		// Commit
-		err = tx.Commit()
-		if err != nil {
-			fmt.Printf("Error commiting transaction: %q", err)
-			return
-		}
-
+		wg.Wait()
+		process.TxCommit()
+		fmt.Println("Everything finished correctly")
 	} else {
 		fmt.Println("Invalid option")
 	}
