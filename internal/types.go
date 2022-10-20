@@ -41,3 +41,21 @@ type Claims struct {
 type ClaimsRecord struct {
 	Address string `json:"address"`
 }
+
+// BlockResult
+type BlockResult struct {
+	Result Result `json:"result"`
+}
+
+type Result struct {
+	EndBlockEvents []EndBlockEvent `json:"end_block_events"`
+}
+
+type EndBlockEvent struct {
+	Type       string      `json:"type"`
+	Attributes []Attribute `json:"attributes"`
+}
+
+type Attribute struct {
+	Value string `json:"value"`
+}

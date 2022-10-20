@@ -16,6 +16,19 @@ func OpenDatabase(path string) *sql.DB {
 	return db
 }
 
+func CreateAttestationDatabase(db *sql.DB) {
+	sqlStmt := `
+       create table account (
+        id integer not null primary key,
+        address text unique
+    );`
+	_, err := db.Exec(sqlStmt)
+	if err != nil {
+		fmt.Printf("Error executing the table creation: %q", err)
+		panic("Stop processing")
+	}
+}
+
 func CreateAccountDatabase(db *sql.DB) {
 	sqlStmt := `
        create table account (
@@ -47,7 +60,7 @@ func CreateDatabase(path string) *sql.DB {
 	db := OpenDatabase(path)
 
 	sqlStmt := `
-       create table claims (
+       create table if not exists claims(
         id integer not null primary key,
         address text unique,
         amount text
