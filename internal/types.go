@@ -24,3 +24,20 @@ type Account struct {
 type AccountResponse struct {
 	Account Account `json:"account"`
 }
+
+// Genesis parser
+type Genesis struct {
+	AppState AppState `json:"app_state"`
+}
+
+type AppState struct {
+	Claims Claims `json:"claims"`
+}
+
+type Claims struct {
+	ClaimsRecords []ClaimsRecord `json:"claims_records"`
+}
+
+type ClaimsRecord struct {
+	Address string `json:"address"`
+}

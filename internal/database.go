@@ -16,6 +16,33 @@ func OpenDatabase(path string) *sql.DB {
 	return db
 }
 
+func CreateAccountDatabase(db *sql.DB) {
+	sqlStmt := `
+       create table account (
+        id integer not null primary key,
+        address text unique
+    );`
+	_, err := db.Exec(sqlStmt)
+	if err != nil {
+		fmt.Printf("Error executing the table creation: %q", err)
+		panic("Stop processing")
+	}
+}
+
+func CreateInsertAccountQuery(db *sql.DB) (*sql.Tx, *sql.Stmt) {
+	tx, err := db.Begin()
+	if err != nil {
+		fmt.Printf("Error creating transaction: %q", err)
+		panic("Stop proceesing")
+	}
+	insertAccount, err := tx.Prepare("insert into account(address) values(?)")
+	if err != nil {
+		fmt.Printf("Error preparing transaction: %q", err)
+		panic("Stop proceesing")
+	}
+	return tx, insertAccount
+}
+
 func CreateDatabase(path string) *sql.DB {
 	db := OpenDatabase(path)
 
@@ -23,11 +50,7 @@ func CreateDatabase(path string) *sql.DB {
        create table claims (
         id integer not null primary key,
         address text unique,
-        prebalance text,
-        postbalance text,
-        presequence text,
-        postsequence text,
-        affected bool
+        amount text
     );
        `
 
@@ -37,45 +60,20 @@ func CreateDatabase(path string) *sql.DB {
 		panic("Stop processing")
 	}
 
-	sqlStmtBalances := `
-       create table balances (
-        id integer not null primary key,
-        address text,
-        denom text,
-        preamount text,
-        postamount text
-    );
-       `
-
-	_, err = db.Exec(sqlStmtBalances)
-	if err != nil {
-		fmt.Printf("Error executing the table creation: %q", err)
-		panic("Stop processing")
-	}
-
 	return db
 }
 
-func CreateInsertBalanceQuery(db *sql.DB, tx *sql.Tx)  *sql.Stmt {
-	insertBalances, err := tx.Prepare("insert into balances(address, denom, preamount, postamount) values(?,?,?,?)")
-	if err != nil {
-		fmt.Printf("Error preparing transaction: %q", err)
-		panic("Stop proceesing")
-	}
-	return insertBalances
-}
-
-func CreateInsertClaimsQuery(db *sql.DB) (*sql.Tx, *sql.Stmt) {
+func CreateInsertBalanceQuery(db *sql.DB) (*sql.Tx, *sql.Stmt) {
 	tx, err := db.Begin()
 	if err != nil {
 		fmt.Printf("Error creating transaction: %q", err)
 		panic("Stop proceesing")
 	}
 
-	insertClaims, err := tx.Prepare("insert into claims(address, prebalance, postbalance, presequence, postsequence, affected) values(?,?,?,?,?,?)")
+	insertBalances, err := tx.Prepare("insert into claims(address, amount) values(?,?)")
 	if err != nil {
 		fmt.Printf("Error preparing transaction: %q", err)
 		panic("Stop proceesing")
 	}
-	return tx, insertClaims
+	return tx, insertBalances
 }
