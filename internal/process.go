@@ -66,6 +66,11 @@ func (p *Process) DoWork(accounts []string) {
 
 			// Make sure that the balance was moved
 			balancePostRes := GetEvmosBalance(address, PostHeight)
+			// If pre and post balance are equal, it's because the account has no longer claims records. They were moved with an attestation tx
+			if balancePreRes.Balance.Amount == balancePostRes.Balance.Amount {
+				continue
+			}
+
 			if balancePostRes.Balance.Amount != "0" {
 				fmt.Println("This account didnt get its balance moved!", address)
 				panic("Stop execution")
