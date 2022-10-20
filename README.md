@@ -32,10 +32,15 @@ rm results.db
 
 ## Results
 
-The file `accounts_with_claims.db` is generated after running `init`. It parses the genesis file getting all the accounts that had claims records.
-
 The file `results.db` has the result of executing the `process` script.
 It's a table named `claims` with the columns:
 
 - `address`
 - `amount`
+
+## How it works
+
+- `init`: gets all the wallets that had claims records on the genesis file
+- `process`: check if the account was affected by the clawback bug and add that account and the amount to the `results.db` database
+- `addAttestationRecords`: using the `block_result` information from the clawback block, we all the addresses that sent their coins to the community wallet. Note: this block didn't have any transaction, so most of the wallets inside this file are from the clawback function.
+- `processAttestationRecords`: iterates using all the wallets added in the previous step and it makes sure that their balance was incorrectly moved.
