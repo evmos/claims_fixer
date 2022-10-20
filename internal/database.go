@@ -60,7 +60,7 @@ func CreateDatabase(path string) *sql.DB {
 	db := OpenDatabase(path)
 
 	sqlStmt := `
-       create table claims (
+       create table if not exists claims(
         id integer not null primary key,
         address text unique,
         amount text
