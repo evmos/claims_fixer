@@ -1,6 +1,6 @@
 package v9
 
-var Accounts = [2146][2]string{
+var Accounts = [2145][2]string{
 	{"evmos1009egsf8sk3puq3aynt8eymmcqnneezkkvceav", "20299404928815863552"},
 	{"evmos100wr0u56zfmzyfzjqv0zp0wmczy6am7yel2na9", "1001000000000000000"},
 	{"evmos102wuee7tga22vnnxkmev7w79ch5hpudd7an3eh", "4054851449586459648"},
@@ -322,7 +322,6 @@ var Accounts = [2146][2]string{
 	{"evmos15a8z32c006w592s2zg887kmhj5p25vjc7r998s", "5793130626125204336"},
 	{"evmos15c0r4zwd2m9xeegmtj99c2xfxz242l86dnwra3", "33513376331890785280"},
 	{"evmos15cdyw9y2wthsc77edv9xhjmklww8u5urwmnjqt", "1100000000000000"},
-	{"evmos15cvq3ljql6utxseh0zau9m8ve2j8erz89m5wkz", "73984131949005522370103808"},
 	{"evmos15djwy0ktxd43xnfddtt3hk4a9sds64rsdyut24", "1100000000000000"},
 	{"evmos15dlu4ks4vtutzgrrl0f7qjlwxetsm9e8qkd5dj", "1100000000000000"},
 	{"evmos15dt7wntvldk5txhqvvff4g63tn2flfqjrtes8f", "22080658831241470464"},
