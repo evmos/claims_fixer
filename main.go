@@ -72,10 +72,6 @@ func main() {
 					if walletDecoded == "evmos1jv65s3grqf6v6jl3dp4t6c9t9rk99cd8974jnh" {
 						continue
 					}
-					// Ignore claims wallet because it's correctly sending the unclaimed evmos
-					if walletDecoded == "evmos15cvq3ljql6utxseh0zau9m8ve2j8erz89m5wkz" {
-						continue
-					}
 
 					if strings.Contains(walletDecoded, "evmos1") {
 						if _, ok := newWallets[walletDecoded]; ok {
@@ -209,6 +205,11 @@ func main() {
 					if walletDecoded == "evmos1jv65s3grqf6v6jl3dp4t6c9t9rk99cd8974jnh" {
 						continue
 					}
+					// Ignore claims wallet because it's correctly sending the unclaimed evmos
+					if walletDecoded == "evmos15cvq3ljql6utxseh0zau9m8ve2j8erz89m5wkz" {
+						continue
+					}
+
 					if strings.Contains(walletDecoded, "evmos1") {
 						if _, ok := newWallets[walletDecoded]; ok {
 							continue
