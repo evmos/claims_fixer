@@ -17,7 +17,7 @@ Note: if the process is killed nothing will be store in the database.
 Note: if you want to run the process again, make sure to remove the `.db` file.
 
 ```sh
-git clone https://github.com/tharsis/claims_fixer -depth 1
+git clone https://github.com/evmos/claims_fixer --depth 1
 cd claims_fixer
 wget https://archive.evmos.org/mainnet/genesis.json
 wget https://github.com/v-homsi/clawback/raw/main/evmos_mainnet_5074187_block-results.json
