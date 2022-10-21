@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -331,6 +332,45 @@ func main() {
 			panic("Stop execution")
 		}
 		fmt.Println("File saved as accounts.txt, rename it to .go when moving it to the evmos repo!")
+
+	} else if os.Args[1] == "calculateTotal" {
+		fmt.Println("Calculating total aevmos...")
+
+		dbToRead := internal.OpenDatabase("./results.db")
+		fmt.Println("Database opened")
+
+		// Get all the rows without the ibc account that was fixed via governance
+		rows, err := dbToRead.Query("select amount from claims where address != \"evmos1a53udazy8ayufvy0s434pfwjcedzqv345dnt3x\" order by address")
+		if err != nil {
+			fmt.Println("Error reading addresses", err)
+			return
+		}
+
+		total := big.NewInt(0)
+
+		for rows.Next() {
+			var amount string
+			err := rows.Scan(&amount)
+			if err != nil {
+				fmt.Println("Error getting row!", err)
+				return
+			}
+
+			current := new(big.Int)
+			current, ok := current.SetString(amount, 10)
+			if !ok {
+				fmt.Println("Error parsing the balance", amount, ok)
+				return
+			}
+
+			total = total.Add(total, current)
+		}
+
+		fmt.Println("Finished getting all the entries")
+		rows.Close()
+		dbToRead.Close()
+
+		fmt.Println("Total aevmos:" + total.String())
 
 	} else {
 		fmt.Println("Invalid option")
